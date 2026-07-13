@@ -2,3 +2,5 @@
 .idea/
 *.pdf
 report/
+/.venv
+NHIndexMonthly.csv
