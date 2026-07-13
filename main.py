@@ -4,7 +4,6 @@
         --output "index_report.pdf"
 """
 
-
 import argparse
 import math
 from pathlib import Path
@@ -18,7 +17,15 @@ from reportlab.pdfgen import canvas
 from reportlab.platypus import Paragraph, Table, TableStyle
 
 
-REQUIRED_COLUMNS = {"date", "ror", "type", "cnt", "aumbn"}
+CANONICAL_COLUMNS = ["date", "ror", "type", "cnt", "aumbn"]
+COLUMN_ALIASES = {
+    "date": ["date", "month", "period", "as_of_date", "month_end", "monthend"],
+    "ror": ["ror", "return", "returns", "monthly_return", "monthly_returns", "performance"],
+    "type": ["type", "index", "index_name", "strategy", "category", "name"],
+    "cnt": ["cnt", "count", "observations", "observation_count", "num_observations", "managers", "manager_count"],
+    "aumbn": ["aumbn", "aum_bn", "aum", "assets_bn", "assets", "aum_billion"],
+}
+REQUIRED_CANONICAL_COLUMNS = {"date", "ror", "type"}
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -53,18 +60,80 @@ STYLES.add(ParagraphStyle(
     parent=STYLES["Tiny"],
     alignment=2,
 ))
+STYLES.add(ParagraphStyle(
+    name="HeaderTiny",
+    parent=STYLES["Tiny"],
+    textColor=colors.white,
+))
+STYLES.add(ParagraphStyle(
+    name="HeaderTinyRight",
+    parent=STYLES["HeaderTiny"],
+    alignment=2,
+))
+
+
+def normalize_column_name(column_name: str) -> str:
+    return (
+        str(column_name)
+        .strip()
+        .lower()
+        .replace(" ", "_")
+        .replace("-", "_")
+        .replace("/", "_")
+    )
+
+
+def find_column(columns: list[str], canonical_name: str) -> str | None:
+    normalized_to_original = {normalize_column_name(column): column for column in columns}
+    for alias in COLUMN_ALIASES[canonical_name]:
+        if alias in normalized_to_original:
+            return normalized_to_original[alias]
+    return None
+
+
+def standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    rename_map = {}
+    for canonical_name in CANONICAL_COLUMNS:
+        source_column = find_column(list(df.columns), canonical_name)
+        if source_column:
+            rename_map[source_column] = canonical_name
+
+    df = df.rename(columns=rename_map).copy()
+    missing_required = REQUIRED_CANONICAL_COLUMNS.difference(df.columns)
+    if missing_required:
+        expected = {
+            name: COLUMN_ALIASES[name]
+            for name in sorted(missing_required)
+        }
+        raise ValueError(
+            "Input file is missing required index-report columns. "
+            f"Missing: {sorted(missing_required)}. Accepted column names: {expected}"
+        )
+
+    if "cnt" not in df.columns:
+        df["cnt"] = math.nan
+    if "aumbn" not in df.columns:
+        df["aumbn"] = math.nan
+    return df[CANONICAL_COLUMNS]
 
 
 def load_index_data(input_path: str | Path) -> pd.DataFrame:
     """Load and validate the monthly index dataset."""
-    df = pd.read_csv(input_path, parse_dates=["date"])
-    missing = REQUIRED_COLUMNS.difference(df.columns)
-    if missing:
-        raise ValueError(f"Input file is missing required columns: {sorted(missing)}")
+    df = pd.read_csv(input_path)
+    df = standardize_columns(df)
 
     df = df.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["ror"] = pd.to_numeric(df["ror"], errors="coerce")
+    df["cnt"] = pd.to_numeric(df["cnt"], errors="coerce")
+    df["aumbn"] = pd.to_numeric(df["aumbn"], errors="coerce")
+
+    # If returns look like percentages, e.g. 2.1 instead of 0.021, convert them.
+    if df["ror"].abs().dropna().median() > 1:
+        df["ror"] = df["ror"] / 100
+
     df["type"] = df["type"].astype(str).str.strip()
-    df = df.dropna(subset=["date", "type"])
+    df = df.dropna(subset=["date", "type", "ror"])
     df = df.sort_values(["type", "date"]).reset_index(drop=True)
     df["year"] = df["date"].dt.year
     df["month"] = df["date"].dt.month
@@ -183,6 +252,23 @@ def cumulative_index(group: pd.DataFrame) -> pd.Series:
     return (1 + group.sort_values("date")["ror"]).cumprod() * 100
 
 
+def build_short_correlation_lookup(df: pd.DataFrame, months: int = 12, limit: int = 5) -> dict:
+    """Calculate closest and lowest short-term correlations for each index."""
+    returns = df.pivot_table(index="date", columns="type", values="ror").sort_index()
+    recent_returns = returns.tail(months)
+    correlation_matrix = recent_returns.corr(min_periods=max(4, months // 2))
+    lookup = {}
+
+    for index_name in correlation_matrix.columns:
+        correlations = correlation_matrix[index_name].drop(index_name, errors="ignore").dropna()
+        lookup[index_name] = {
+            "closest": correlations.sort_values(ascending=False).head(limit),
+            "lowest": correlations.sort_values(ascending=True).head(limit),
+        }
+
+    return lookup
+
+
 def draw_header(pdf: canvas.Canvas, title: str, subtitle: str, label: str) -> None:
     pdf.setFillColor(colors.white)
     pdf.rect(0, PAGE_HEIGHT - 0.48 * inch, PAGE_WIDTH, 0.48 * inch, stroke=0, fill=1)
@@ -234,17 +320,22 @@ def draw_footer(pdf: canvas.Canvas, page_number: int, latest_date: pd.Timestamp)
 
 def draw_card(pdf: canvas.Canvas, x: float, y: float, width: float, height: float,
               label: str, value: str, accent=NAVY) -> None:
+    label_font_size = 6.1
+    value_font_size = 10.2
+    label_y = y + height - 0.198 * inch
+    value_y = y + 0.100 * inch
+
     pdf.setFillColor(PANEL)
     pdf.setStrokeColor(colors.HexColor("#E7EAEE"))
     pdf.roundRect(x, y, width, height, 4, stroke=1, fill=1)
     pdf.setFillColor(accent)
     pdf.rect(x, y + height - 0.06 * inch, width, 0.06 * inch, stroke=0, fill=1)
     pdf.setFillColor(MUTED)
-    pdf.setFont("Helvetica", 6.8)
-    pdf.drawString(x + 0.08 * inch, y + height - 0.21 * inch, label.upper())
+    pdf.setFont("Helvetica", label_font_size)
+    pdf.drawString(x + 0.08 * inch, label_y, label.upper())
     pdf.setFillColor(DARK)
-    pdf.setFont("Helvetica-Bold", 12)
-    pdf.drawString(x + 0.08 * inch, y + 0.15 * inch, value[:28])
+    pdf.setFont("Helvetica-Bold", value_font_size)
+    pdf.drawString(x + 0.08 * inch, value_y, value[:28])
 
 
 def draw_section_label(pdf: canvas.Canvas, x: float, y: float, text: str) -> None:
@@ -254,7 +345,8 @@ def draw_section_label(pdf: canvas.Canvas, x: float, y: float, text: str) -> Non
 
 
 def draw_line_chart(pdf: canvas.Canvas, x: float, y: float, width: float, height: float,
-                    series: list[tuple[str, list[float]]], title: str) -> None:
+                    series: list[tuple[str, list[float]]], title: str,
+                    y_axis_format: str = "number", show_legend: bool = True) -> None:
     """Draw a simple line chart directly in the PDF."""
     draw_section_label(pdf, x, y + height + 0.12 * inch, title)
 
@@ -285,7 +377,11 @@ def draw_line_chart(pdf: canvas.Canvas, x: float, y: float, width: float, height
     pdf.setFont("Helvetica", 6.2)
     for i in range(5):
         value = low + (high - low) * i / 4
-        pdf.drawRightString(x - 0.05 * inch, y + height * i / 4 - 2, f"{value:.0f}")
+        if y_axis_format == "percent_index":
+            label = f"{value:.0f}"
+        else:
+            label = f"{value:.0f}"
+        pdf.drawRightString(x - 0.05 * inch, y + height * i / 4 - 2, label)
 
     for series_number, (name, values) in enumerate(series):
         color = colors.HexColor(PALETTE[series_number % len(PALETTE)])
@@ -302,13 +398,14 @@ def draw_line_chart(pdf: canvas.Canvas, x: float, y: float, width: float, height
                 pdf.line(last_point[0], last_point[1], point[0], point[1])
             last_point = point
 
-        legend_x = x + width - 1.25 * inch
-        legend_y = y + height - series_number * 0.13 * inch
-        pdf.setFillColor(color)
-        pdf.rect(legend_x, legend_y, 0.06 * inch, 0.06 * inch, stroke=0, fill=1)
-        pdf.setFillColor(DARK)
-        pdf.setFont("Helvetica", 6.3)
-        pdf.drawString(legend_x + 0.09 * inch, legend_y - 1, name[:22])
+        if show_legend:
+            legend_x = x + series_number * 0.57 * inch
+            legend_y = y - 0.21 * inch
+            pdf.setFillColor(color)
+            pdf.rect(legend_x, legend_y, 0.055 * inch, 0.055 * inch, stroke=0, fill=1)
+            pdf.setFillColor(DARK)
+            pdf.setFont("Helvetica", 5.9)
+            pdf.drawString(legend_x + 0.075 * inch, legend_y - 1, name[:7])
 
     pdf.setStrokeColor(DARK)
     pdf.setLineWidth(0.6)
@@ -316,8 +413,11 @@ def draw_line_chart(pdf: canvas.Canvas, x: float, y: float, width: float, height
     pdf.line(x, y, x, y + height)
 
 
-def paragraph_cell(value: str, right_align: bool = False) -> Paragraph:
-    style = STYLES["TinyRight"] if right_align else STYLES["Tiny"]
+def paragraph_cell(value: str, right_align: bool = False, header: bool = False) -> Paragraph:
+    if header:
+        style = STYLES["HeaderTinyRight"] if right_align else STYLES["HeaderTiny"]
+    else:
+        style = STYLES["TinyRight"] if right_align else STYLES["Tiny"]
     return Paragraph(str(value), style)
 
 
@@ -326,7 +426,7 @@ def draw_table(pdf: canvas.Canvas, rows: list[list[str]], x: float, top_y: float
     formatted_rows = []
     for row_index, row in enumerate(rows):
         formatted_rows.append([
-            paragraph_cell(cell, right_align=col_index != 1 and row_index != 0)
+            paragraph_cell(cell, right_align=col_index != 1 and row_index != 0, header=row_index == 0)
             for col_index, cell in enumerate(row)
         ])
 
@@ -396,13 +496,13 @@ def draw_summary_page(pdf: canvas.Canvas, summary: pd.DataFrame,
 
     top_y = PAGE_HEIGHT - 1.72 * inch
     card_width = (PAGE_WIDTH - 2 * MARGIN - 0.36 * inch) / 4
-    draw_card(pdf, MARGIN, top_y, card_width, 0.48 * inch,
+    draw_card(pdf, MARGIN, top_y, card_width, 0.54 * inch,
               "Best YTD", f"{best['index']} {format_percent(best['ytd_return'])}", GREEN)
-    draw_card(pdf, MARGIN + card_width + 0.12 * inch, top_y, card_width, 0.48 * inch,
+    draw_card(pdf, MARGIN + card_width + 0.12 * inch, top_y, card_width, 0.54 * inch,
               "Weakest YTD", f"{worst['index']} {format_percent(worst['ytd_return'])}", RED)
-    draw_card(pdf, MARGIN + 2 * (card_width + 0.12 * inch), top_y, card_width, 0.48 * inch,
+    draw_card(pdf, MARGIN + 2 * (card_width + 0.12 * inch), top_y, card_width, 0.54 * inch,
               "Indices Covered", format_number(len(summary)), NAVY)
-    draw_card(pdf, MARGIN + 3 * (card_width + 0.12 * inch), top_y, card_width, 0.48 * inch,
+    draw_card(pdf, MARGIN + 3 * (card_width + 0.12 * inch), top_y, card_width, 0.54 * inch,
               "Latest Observations", format_number(summary["latest_observations"].sum()), NAVY)
 
     draw_section_label(pdf, MARGIN, PAGE_HEIGHT - 2.02 * inch, "Summary Metrics")
@@ -423,18 +523,60 @@ def draw_summary_page(pdf: canvas.Canvas, summary: pd.DataFrame,
     draw_footer(pdf, page_number, latest_date)
 
 
-def observation_series_by_year(group: pd.DataFrame) -> list[tuple[str, list[float]]]:
+def normalized_observation_series_by_year(group: pd.DataFrame) -> list[tuple[str, list[float]]]:
+    """Return yearly observation-count series normalized to January = 100.
+
+    Raw observation counts are useful, but they can make each year hard to
+    compare when database coverage changes. Normalizing each year to January
+    highlights within-year survivorship/reporting coverage changes.
+    """
     series = []
     for year in sorted(group["year"].unique(), reverse=True)[:8]:
         year_group = group[group["year"] == year].sort_values("month")
+        january_count = year_group.loc[year_group["month"] == 1, "cnt"]
+        if january_count.empty or january_count.iloc[0] == 0:
+            continue
+
+        base_count = january_count.iloc[0]
         values = [math.nan] * 12
         for _, row in year_group.iterrows():
-            values[int(row["month"]) - 1] = row["cnt"]
+            values[int(row["month"]) - 1] = row["cnt"] / base_count * 100
         series.append((str(year), values))
     return series
 
 
+def format_correlation_items(items: pd.Series) -> str:
+    if items.empty:
+        return "Not enough short-term data"
+    return ", ".join(f"{name} ({value:.2f})" for name, value in items.items())
+
+
+def draw_short_correlation_summary(pdf: canvas.Canvas, index_name: str,
+                                   correlation_lookup: dict, x: float, y: float,
+                                   width: float) -> None:
+    correlation_data = correlation_lookup.get(index_name, {})
+    closest = correlation_data.get("closest", pd.Series(dtype=float))
+    lowest = correlation_data.get("lowest", pd.Series(dtype=float))
+
+    draw_section_label(pdf, x, y + 0.24 * inch, "Short-Term Correlation (latest 12 months)")
+    pdf.setFillColor(PANEL)
+    pdf.setStrokeColor(colors.HexColor("#E7EAEE"))
+    pdf.roundRect(x, y - 0.12 * inch, width, 0.28 * inch, 4, stroke=1, fill=1)
+
+    pdf.setFillColor(DARK)
+    pdf.setFont("Helvetica-Bold", 6.8)
+    pdf.drawString(x + 0.08 * inch, y + 0.04 * inch, "Closest:")
+    pdf.setFont("Helvetica", 6.8)
+    pdf.drawString(x + 0.52 * inch, y + 0.04 * inch, format_correlation_items(closest)[:92])
+
+    pdf.setFont("Helvetica-Bold", 6.8)
+    pdf.drawString(x + 0.08 * inch, y - 0.07 * inch, "Lowest:")
+    pdf.setFont("Helvetica", 6.8)
+    pdf.drawString(x + 0.52 * inch, y - 0.07 * inch, format_correlation_items(lowest)[:92])
+
+
 def draw_index_page(pdf: canvas.Canvas, group: pd.DataFrame, metrics: pd.Series,
+                    correlation_lookup: dict,
                     latest_date: pd.Timestamp, page_number: int) -> None:
     index_name = metrics["index"]
     start_date = metrics["start_date"]
@@ -445,7 +587,7 @@ def draw_index_page(pdf: canvas.Canvas, group: pd.DataFrame, metrics: pd.Series,
         "Index Detail",
     )
 
-    top_y = PAGE_HEIGHT - 1.38 * inch
+    top_y = PAGE_HEIGHT - 1.56 * inch
     card_width = (PAGE_WIDTH - 2 * MARGIN - 0.60 * inch) / 6
     cards = [
         ("Latest", format_percent(metrics["latest_month_return"]),
@@ -465,7 +607,7 @@ def draw_index_page(pdf: canvas.Canvas, group: pd.DataFrame, metrics: pd.Series,
             MARGIN + card_number * (card_width + 0.12 * inch),
             top_y,
             card_width,
-            0.46 * inch,
+            0.52 * inch,
             label,
             value,
             color,
@@ -481,6 +623,7 @@ def draw_index_page(pdf: canvas.Canvas, group: pd.DataFrame, metrics: pd.Series,
         2.28 * inch,
         [(index_name, performance)],
         "Cumulative Performance (rebased to 100)",
+        show_legend=False,
     )
 
     draw_line_chart(
@@ -489,15 +632,25 @@ def draw_index_page(pdf: canvas.Canvas, group: pd.DataFrame, metrics: pd.Series,
         2.65 * inch,
         4.75 * inch,
         2.28 * inch,
-        observation_series_by_year(ordered_group),
-        "Observation Count by Month",
+        normalized_observation_series_by_year(ordered_group),
+        "Normalized Observation Count by Month (Jan = 100)",
+        y_axis_format="percent_index",
+    )
+
+    draw_short_correlation_summary(
+        pdf,
+        index_name,
+        correlation_lookup,
+        MARGIN,
+        5.75 * inch,
+        PAGE_WIDTH - 2 * MARGIN,
     )
 
     pdf.setFillColor(MUTED)
     pdf.setFont("Helvetica", 6.2)
     for month_index, month in enumerate(MONTHS):
         pdf.drawCentredString(5.78 * inch + 4.75 * inch * month_index / 11,
-                              2.49 * inch, month[0])
+                              2.30 * inch, month[0])
 
     draw_section_label(pdf, MARGIN, 1.58 * inch, "Monthly Returns and Average Observation Count")
     table_rows = build_monthly_return_table(ordered_group[ordered_group["date"] >= pd.Timestamp(2021, 1, 1)])
@@ -519,6 +672,7 @@ def draw_index_page(pdf: canvas.Canvas, group: pd.DataFrame, metrics: pd.Series,
 def generate_pdf_report(input_path: str | Path, output_path: str | Path) -> None:
     df = load_index_data(input_path)
     summary = build_summary_metrics(df)
+    correlation_lookup = build_short_correlation_lookup(df)
     latest_date = df["date"].max()
 
     output_path = Path(output_path)
@@ -533,7 +687,7 @@ def generate_pdf_report(input_path: str | Path, output_path: str | Path) -> None
     for _, metrics in summary.sort_values("index").iterrows():
         page_number += 1
         group = df[df["type"] == metrics["index"]]
-        draw_index_page(pdf, group, metrics, latest_date, page_number)
+        draw_index_page(pdf, group, metrics, correlation_lookup, latest_date, page_number)
         pdf.showPage()
 
     pdf.save()
