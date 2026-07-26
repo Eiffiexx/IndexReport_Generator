@@ -2,6 +2,9 @@
     python3 main.py \
         --input "/Users/brain/Downloads/NHIndexMonthly.csv" \
         --output "index_report.pdf"
+
+    python ./main.py --input ./NHIndexMonthly.csv --description ./description.csv
+
 """
 
 import argparse
@@ -16,6 +19,8 @@ from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
 from reportlab.platypus import Paragraph, Table, TableStyle
 
+FONT_NAME_BOLD = "Helvetica-Bold"
+FONT_NAME ="Helvetica"
 
 CANONICAL_COLUMNS = ["date", "ror", "type", "cnt", "aumbn"]
 COLUMN_ALIASES = {
@@ -52,7 +57,7 @@ STYLES = getSampleStyleSheet()
 STYLES.add(ParagraphStyle(
     name="Tiny",
     parent=STYLES["Normal"],
-    fontName="Helvetica",
+    fontName=FONT_NAME,
     fontSize=6.7,
     leading=7.6,
     textColor=DARK,
@@ -75,7 +80,7 @@ STYLES.add(ParagraphStyle(
 STYLES.add(ParagraphStyle(
     name="Commentary",
     parent=STYLES["Normal"],
-    fontName="Helvetica",
+    fontName=FONT_NAME,
     fontSize=7.4,
     leading=9,
     textColor=DARK,
@@ -347,16 +352,16 @@ def draw_header(pdf: canvas.Canvas, title: str, subtitle: str, label: str,
         pdf.setLineWidth(0.8)
         pdf.rect(logo_x, logo_y - 0.12 * inch, 0.22 * inch, 0.22 * inch, stroke=1, fill=0)
         pdf.setFillColor(colors.black)
-        pdf.setFont("Helvetica-Bold", 9)
+        pdf.setFont(FONT_NAME_BOLD, 9)
         pdf.drawCentredString(logo_x + 0.11 * inch, logo_y - 0.055 * inch, "N")
 
         wordmark_x = logo_x + 0.31 * inch
-        pdf.setFont("Helvetica-Bold", 11)
+        pdf.setFont(FONT_NAME_BOLD, 11)
         pdf.setFillColor(colors.black)
         nilsson_text = "NILSSON"
         pdf.drawString(wordmark_x, logo_y - 0.05 * inch, nilsson_text)
         pdf.setFillColor(ORANGE)
-        hedge_x = wordmark_x + pdf.stringWidth(nilsson_text, "Helvetica-Bold", 11) + 0.03 * inch
+        hedge_x = wordmark_x + pdf.stringWidth(nilsson_text, FONT_NAME_BOLD, 11) + 0.03 * inch
         pdf.drawString(hedge_x, logo_y - 0.05 * inch, "HEDGE")
         logo_right = hedge_x + 0.43 * inch
     pdf.linkURL(
@@ -366,14 +371,14 @@ def draw_header(pdf: canvas.Canvas, title: str, subtitle: str, label: str,
     )
 
     pdf.setFillColor(DARK)
-    pdf.setFont("Helvetica-Bold", 7.5)
+    pdf.setFont(FONT_NAME_BOLD, 7.5)
     pdf.drawRightString(PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 0.28 * inch, label.upper())
 
     pdf.setFillColor(DARK)
-    pdf.setFont("Helvetica-Bold", 18)
+    pdf.setFont(FONT_NAME_BOLD, 18)
     pdf.drawString(MARGIN, PAGE_HEIGHT - 0.72 * inch, title)
     pdf.setFillColor(MUTED)
-    pdf.setFont("Helvetica", 8.5)
+    pdf.setFont(FONT_NAME, 8.5)
     pdf.drawString(MARGIN, PAGE_HEIGHT - 0.91 * inch, subtitle)
 
 
@@ -381,7 +386,7 @@ def draw_footer(pdf: canvas.Canvas, page_number: int, latest_date: pd.Timestamp)
     pdf.setStrokeColor(GRID)
     pdf.line(MARGIN, 0.28 * inch, PAGE_WIDTH - MARGIN, 0.28 * inch)
     pdf.setFillColor(MUTED)
-    pdf.setFont("Helvetica", 6.5)
+    pdf.setFont(FONT_NAME, 6.5)
     pdf.drawString(
         MARGIN,
         0.16 * inch,
@@ -403,10 +408,10 @@ def draw_card(pdf: canvas.Canvas, x: float, y: float, width: float, height: floa
     pdf.setFillColor(accent)
     pdf.rect(x, y + height - 0.06 * inch, width, 0.06 * inch, stroke=0, fill=1)
     pdf.setFillColor(MUTED)
-    pdf.setFont("Helvetica", label_font_size)
+    pdf.setFont(FONT_NAME, label_font_size)
     pdf.drawString(x + 0.08 * inch, label_y, label.upper())
     pdf.setFillColor(DARK)
-    pdf.setFont("Helvetica-Bold", value_font_size)
+    pdf.setFont(FONT_NAME_BOLD, value_font_size)
     if value_align == "right":
         pdf.drawRightString(x + width - 0.08 * inch, value_y, value[:28])
     else:
@@ -415,7 +420,7 @@ def draw_card(pdf: canvas.Canvas, x: float, y: float, width: float, height: floa
 
 def draw_section_label(pdf: canvas.Canvas, x: float, y: float, text: str) -> None:
     pdf.setFillColor(DARK)
-    pdf.setFont("Helvetica-Bold", 9.5)
+    pdf.setFont(FONT_NAME_BOLD, 9.5)
     pdf.drawString(x, y, text)
 
 
@@ -450,7 +455,7 @@ def draw_line_chart(pdf: canvas.Canvas, x: float, y: float, width: float, height
         return y + (value - low) / (high - low) * height
 
     pdf.setFillColor(MUTED)
-    pdf.setFont("Helvetica", 6.2)
+    pdf.setFont(FONT_NAME, 6.2)
     for i in range(5):
         value = low + (high - low) * i / 4
         label = f"{value:.0f}"
@@ -458,7 +463,7 @@ def draw_line_chart(pdf: canvas.Canvas, x: float, y: float, width: float, height
 
     if x_labels:
         pdf.setFillColor(MUTED)
-        pdf.setFont("Helvetica", 6.1)
+        pdf.setFont(FONT_NAME, 6.1)
         count = len(x_labels)
         for index, label in enumerate(x_labels):
             if not label:
@@ -486,7 +491,7 @@ def draw_line_chart(pdf: canvas.Canvas, x: float, y: float, width: float, height
             pdf.setFillColor(color)
             pdf.rect(legend_x, legend_y, 0.055 * inch, 0.055 * inch, stroke=0, fill=1)
             pdf.setFillColor(DARK)
-            pdf.setFont("Helvetica", 5.9)
+            pdf.setFont(FONT_NAME, 5.9)
             pdf.drawString(legend_x + 0.075 * inch, legend_y - 1, name[:7])
 
     pdf.setStrokeColor(DARK)
@@ -521,7 +526,7 @@ def draw_table(pdf: canvas.Canvas, rows: list[list[str]], x: float, top_y: float
     style = [
         ("BACKGROUND", (0, 0), (-1, 0), NAVY),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, 0), (-1, 0), FONT_NAME_BOLD),
         ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#DDE2E7")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("LEFTPADDING", (0, 0), (-1, -1), 2.2),
@@ -589,7 +594,7 @@ def draw_correlation_triangle_page(pdf: canvas.Canvas, df: pd.DataFrame,
     columns = [name for name in MAIN_INDICES if name in returns.columns]
     if len(columns) < 2:
         pdf.setFillColor(MUTED)
-        pdf.setFont("Helvetica", 9)
+        pdf.setFont(FONT_NAME, 9)
         pdf.drawString(MARGIN, PAGE_HEIGHT - 1.35 * inch, "Not enough main-index data for a correlation triangle.")
         draw_footer(pdf, page_number, latest_date)
         return
@@ -619,7 +624,7 @@ def draw_correlation_triangle_page(pdf: canvas.Canvas, df: pd.DataFrame,
         ("BACKGROUND", (0, 0), (-1, 0), NAVY),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("BACKGROUND", (0, 1), (0, -1), colors.HexColor("#EEF3F6")),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, 0), (-1, 0), FONT_NAME_BOLD),
         ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#DDE2E7")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
@@ -632,7 +637,7 @@ def draw_correlation_triangle_page(pdf: canvas.Canvas, df: pd.DataFrame,
     table.drawOn(pdf, MARGIN, PAGE_HEIGHT - 1.45 * inch - table_height)
 
     pdf.setFillColor(MUTED)
-    pdf.setFont("Helvetica", 7.5)
+    pdf.setFont(FONT_NAME, 7.5)
     pdf.drawString(
         MARGIN,
         PAGE_HEIGHT - 1.62 * inch - table_height,
@@ -676,7 +681,7 @@ def draw_summary_page(pdf: canvas.Canvas, summary: pd.DataFrame,
                column_widths, 0.19 * inch)
 
     pdf.setFillColor(MUTED)
-    pdf.setFont("Helvetica", 7)
+    pdf.setFont(FONT_NAME, 7)
     pdf.drawString(
         MARGIN,
         0.50 * inch,
@@ -784,7 +789,7 @@ def draw_observation_cone_chart(pdf: canvas.Canvas, x: float, y: float,
         pdf.line(x, yy, x + width, yy)
         value = low + (high - low) * i / 4
         pdf.setFillColor(MUTED)
-        pdf.setFont("Helvetica", 6.1)
+        pdf.setFont(FONT_NAME, 6.1)
         pdf.drawRightString(x - 0.05 * inch, yy - 2, f"{value:.0f}")
 
     upper_points = [
@@ -827,7 +832,7 @@ def draw_observation_cone_chart(pdf: canvas.Canvas, x: float, y: float,
 
     legend_y = y + height + 0.14 * inch
     legend_x = x + width - 1.36 * inch
-    pdf.setFont("Helvetica", 6.0)
+    pdf.setFont(FONT_NAME, 6.0)
     pdf.setFillColor(NAVY)
     pdf.rect(legend_x, legend_y - 0.01 * inch, 0.055 * inch, 0.055 * inch, stroke=0, fill=1)
     pdf.setFillColor(DARK)
@@ -838,7 +843,7 @@ def draw_observation_cone_chart(pdf: canvas.Canvas, x: float, y: float,
     pdf.drawString(legend_x + 0.50 * inch, legend_y - 0.01 * inch, "Historical cone")
 
     pdf.setFillColor(MUTED)
-    pdf.setFont("Helvetica", 6.1)
+    pdf.setFont(FONT_NAME, 6.1)
     for index, month in enumerate(MONTHS):
         pdf.drawCentredString(scale_x(index), y - 0.15 * inch, month)
 
@@ -867,13 +872,13 @@ def draw_short_correlation_summary(pdf: canvas.Canvas, index_name: str,
     pdf.roundRect(x, y - 0.12 * inch, width, 0.48 * inch, 4, stroke=1, fill=1)
 
     pdf.setFillColor(DARK)
-    pdf.setFont("Helvetica-Bold", 6.8)
+    pdf.setFont(FONT_NAME_BOLD, 6.8)
     pdf.drawString(x + 0.08 * inch, y + 0.21 * inch, "Closest:")
     closest_text = Paragraph(format_correlation_items(closest), STYLES["Commentary"])
     closest_text.wrapOn(pdf, width - 0.72 * inch, 0.18 * inch)
     closest_text.drawOn(pdf, x + 0.58 * inch, y + 0.14 * inch)
 
-    pdf.setFont("Helvetica-Bold", 6.8)
+    pdf.setFont(FONT_NAME_BOLD, 6.8)
     pdf.drawString(x + 0.08 * inch, y - 0.01 * inch, "Lowest:")
     lowest_text = Paragraph(format_correlation_items(lowest), STYLES["Commentary"])
     lowest_text.wrapOn(pdf, width - 0.72 * inch, 0.18 * inch)
