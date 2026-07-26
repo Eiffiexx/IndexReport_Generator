@@ -58,7 +58,7 @@ STYLES.add(ParagraphStyle(
     name="Tiny",
     parent=STYLES["Normal"],
     fontName=FONT_NAME,
-    fontSize=6.7,
+    fontSize=10, # 6.7,
     leading=7.6,
     textColor=DARK,
 ))
@@ -645,7 +645,30 @@ def draw_correlation_triangle_page(pdf: canvas.Canvas, df: pd.DataFrame,
     )
     draw_footer(pdf, page_number, latest_date)
 
+def autofit_column_widths(rows, font_size=7.5, max_width=PAGE_WIDTH-2*MARGIN):
+    from reportlab.pdfbase.pdfmetrics import stringWidth
 
+    cols = len(rows[0])
+    widths = [0] * cols
+
+    for row in rows:
+        for i, value in enumerate(row):
+            widths[i] = max(
+                widths[i],
+                stringWidth(
+                    str(value),
+                    FONT_NAME,
+                    font_size
+                ) + 6
+            )
+
+    total = sum(widths)
+
+    if total > max_width:
+        scale = max_width / total
+        widths = [w * scale for w in widths]
+
+    return widths
 def draw_summary_page(pdf: canvas.Canvas, summary: pd.DataFrame,
                       latest_date: pd.Timestamp, page_number: int,
                       logo_path: str | Path | None = None) -> None:
@@ -677,6 +700,11 @@ def draw_summary_page(pdf: canvas.Canvas, summary: pd.DataFrame,
         0.34 * inch, 1.34 * inch, 0.54 * inch, 0.54 * inch, 0.54 * inch,
         0.54 * inch, 0.50 * inch, 0.56 * inch, 0.54 * inch, 0.58 * inch, 0.52 * inch,
     ]
+    rows = summary_table_rows(display_summary)
+    column_widths = autofit_column_widths(
+        rows,
+        font_size=14.0
+    )
     draw_table(pdf, summary_table_rows(display_summary), MARGIN, PAGE_HEIGHT - 2.12 * inch,
                column_widths, 0.19 * inch)
 
